@@ -1,0 +1,1221 @@
+--// CONFIGURATION
+local ITEMS_TO_TRACK = {
+    "Chest",
+}
+
+--// SERVICES
+local Players          = game:GetService("Players")
+local RunService       = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local Lighting         = game:GetService("Lighting")
+
+local localPlayer = Players.LocalPlayer
+local playerGui   = localPlayer:WaitForChild("PlayerGui")
+local camera      = workspace.CurrentCamera
+
+------------------------------------------------------
+-- COLOUR PALETTE
+------------------------------------------------------
+local COL = {
+    bg        = Color3.fromRGB(10, 11, 16),
+    panel     = Color3.fromRGB(16, 18, 26),
+    surface   = Color3.fromRGB(22, 24, 36),
+    border    = Color3.fromRGB(40, 44, 66),
+    accent    = Color3.fromRGB(94, 156, 255),
+    accentDim = Color3.fromRGB(50, 80, 160),
+    green     = Color3.fromRGB(52, 211, 153),
+    greenDim  = Color3.fromRGB(20, 80, 55),
+    red       = Color3.fromRGB(239, 68, 68),
+    redDim    = Color3.fromRGB(80, 20, 20),
+    text      = Color3.fromRGB(220, 224, 240),
+    subtext   = Color3.fromRGB(110, 118, 150),
+    white     = Color3.fromRGB(255, 255, 255),
+}
+
+------------------------------------------------------
+-- SMALL UI HELPERS
+------------------------------------------------------
+local function mkCorner(r, p)
+    local c = Instance.new("UICorner")
+    c.CornerRadius = UDim.new(0, r)
+    c.Parent = p
+    return c
+end
+
+local function mkStroke(th, col, tr, p)
+    local s = Instance.new("UIStroke")
+    s.Thickness    = th
+    s.Color        = col
+    s.Transparency = tr or 0
+    s.Parent       = p
+    return s
+end
+
+------------------------------------------------------
+-- TOGGLE SWITCH FACTORY
+------------------------------------------------------
+local function createToggleSwitch(parent)
+    local track = Instance.new("Frame")
+    track.Size             = UDim2.new(0, 44, 0, 24)
+    track.BackgroundColor3 = COL.surface
+    track.BorderSizePixel  = 0
+    track.Parent           = parent
+    mkCorner(99, track)
+    local trackStroke = mkStroke(1.5, COL.border, 0, track)
+
+    local thumb = Instance.new("Frame")
+    thumb.Size             = UDim2.new(0, 18, 0, 18)
+    thumb.Position         = UDim2.new(0, 3, 0.5, -9)
+    thumb.BackgroundColor3 = COL.subtext
+    thumb.BorderSizePixel  = 0
+    thumb.Parent           = track
+    mkCorner(99, thumb)
+
+    local isOn = false
+    local function setState(on)
+        isOn = on
+        if on then
+            track.BackgroundColor3 = COL.accentDim
+            trackStroke.Color      = COL.accent
+            thumb.BackgroundColor3 = COL.accent
+            thumb.Position         = UDim2.new(0, 23, 0.5, -9)
+        else
+            track.BackgroundColor3 = COL.surface
+            trackStroke.Color      = COL.border
+            thumb.BackgroundColor3 = COL.subtext
+            thumb.Position         = UDim2.new(0, 3, 0.5, -9)
+        end
+    end
+
+    local hitbox = Instance.new("TextButton")
+    hitbox.Size                = UDim2.new(1, 0, 1, 0)
+    hitbox.BackgroundTransparency = 1
+    hitbox.Text                = ""
+    hitbox.Parent              = track
+
+    local callbacks = {}
+    hitbox.MouseButton1Click:Connect(function()
+        setState(not isOn)
+        for _, cb in ipairs(callbacks) do cb(isOn) end
+    end)
+
+    return {
+        Track     = track,
+        SetState  = setState,
+        GetState  = function() return isOn end,
+        OnChanged = function(cb) table.insert(callbacks, cb) end,
+    }
+end
+
+------------------------------------------------------
+-- DRAGGABLE HELPER
+------------------------------------------------------
+local function makeDraggable(frame, handle)
+    handle = handle or frame
+    local dragging, dragStart, startPos = false, nil, nil
+    handle.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+            dragging  = true
+            dragStart = input.Position
+            startPos  = frame.Position
+            input.Changed:Connect(function()
+                if input.UserInputState == Enum.UserInputState.End then dragging = false end
+            end)
+        end
+    end)
+    UserInputService.InputChanged:Connect(function(input)
+        if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
+            local d = input.Position - dragStart
+            frame.Position = UDim2.new(
+                startPos.X.Scale, startPos.X.Offset + d.X,
+                startPos.Y.Scale, startPos.Y.Offset + d.Y)
+        end
+    end)
+end
+
+------------------------------------------------------
+-- CONFIRMATION DIALOG
+------------------------------------------------------
+local safetyOn           = true
+local pendingYesCallback = nil
+
+local confirmGui = Instance.new("ScreenGui")
+confirmGui.Name           = "ConfirmDialog"
+confirmGui.ResetOnSpawn   = false
+confirmGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+confirmGui.DisplayOrder   = 100
+confirmGui.Parent         = playerGui
+
+local confirmBackdrop = Instance.new("Frame")
+confirmBackdrop.Name                   = "Backdrop"
+confirmBackdrop.Size                   = UDim2.new(1, 0, 1, 0)
+confirmBackdrop.BackgroundColor3       = Color3.fromRGB(0, 0, 0)
+confirmBackdrop.BackgroundTransparency = 0.55
+confirmBackdrop.BorderSizePixel        = 0
+confirmBackdrop.Visible                = false
+confirmBackdrop.Parent                 = confirmGui
+
+local confirmCard = Instance.new("Frame")
+confirmCard.Name                   = "Card"
+confirmCard.Size                   = UDim2.new(0, 320, 0, 148)
+confirmCard.AnchorPoint            = Vector2.new(0.5, 0.5)
+confirmCard.Position               = UDim2.new(0.5, 0, 0.5, 0)
+confirmCard.BackgroundColor3       = COL.panel
+confirmCard.BackgroundTransparency = 0
+confirmCard.BorderSizePixel        = 0
+confirmCard.Visible                = false
+confirmCard.Parent                 = confirmGui
+mkCorner(14, confirmCard)
+mkStroke(1.5, COL.accent, 0.2, confirmCard)
+
+local cardStrip = Instance.new("Frame")
+cardStrip.Size             = UDim2.new(0, 3, 0, 30)
+cardStrip.Position         = UDim2.new(0, 16, 0, 16)
+cardStrip.BackgroundColor3 = COL.accent
+cardStrip.BorderSizePixel  = 0
+cardStrip.Parent           = confirmCard
+mkCorner(4, cardStrip)
+
+local confirmTitle = Instance.new("TextLabel")
+confirmTitle.Size               = UDim2.new(1, -28, 0, 22)
+confirmTitle.Position           = UDim2.new(0, 14, 0, 14)
+confirmTitle.BackgroundTransparency = 1
+confirmTitle.Text               = "ARE YOU SURE?"
+confirmTitle.Font               = Enum.Font.Code
+confirmTitle.TextSize           = 14
+confirmTitle.TextColor3         = COL.text
+confirmTitle.TextXAlignment     = Enum.TextXAlignment.Center
+confirmTitle.Parent             = confirmCard
+
+local confirmMsg = Instance.new("TextLabel")
+confirmMsg.Size               = UDim2.new(1, -28, 0, 36)
+confirmMsg.Position           = UDim2.new(0, 14, 0, 42)
+confirmMsg.BackgroundTransparency = 1
+confirmMsg.Text               = "Do you really want to do this?"
+confirmMsg.Font               = Enum.Font.Gotham
+confirmMsg.TextSize           = 13
+confirmMsg.TextColor3         = COL.subtext
+confirmMsg.TextWrapped        = true
+confirmMsg.TextXAlignment     = Enum.TextXAlignment.Center
+confirmMsg.Parent             = confirmCard
+
+local confirmDivider = Instance.new("Frame")
+confirmDivider.Size             = UDim2.new(1, -28, 0, 1)
+confirmDivider.Position         = UDim2.new(0, 14, 0, 86)
+confirmDivider.BackgroundColor3 = COL.border
+confirmDivider.BorderSizePixel  = 0
+confirmDivider.Parent           = confirmCard
+
+local confirmYesBtn = Instance.new("TextButton")
+confirmYesBtn.Size             = UDim2.new(0, 128, 0, 36)
+confirmYesBtn.Position         = UDim2.new(0, 14, 0, 96)
+confirmYesBtn.BackgroundColor3 = COL.greenDim
+confirmYesBtn.Text             = "YES"
+confirmYesBtn.Font             = Enum.Font.GothamBold
+confirmYesBtn.TextSize         = 13
+confirmYesBtn.TextColor3       = COL.green
+confirmYesBtn.AutoButtonColor  = false
+confirmYesBtn.Parent           = confirmCard
+mkCorner(8, confirmYesBtn)
+mkStroke(1.5, COL.green, 0.2, confirmYesBtn)
+
+local confirmNoBtn = Instance.new("TextButton")
+confirmNoBtn.Size             = UDim2.new(0, 128, 0, 36)
+confirmNoBtn.Position         = UDim2.new(1, -142, 0, 96)
+confirmNoBtn.BackgroundColor3 = COL.redDim
+confirmNoBtn.Text             = "NO"
+confirmNoBtn.Font             = Enum.Font.GothamBold
+confirmNoBtn.TextSize         = 13
+confirmNoBtn.TextColor3       = COL.red
+confirmNoBtn.AutoButtonColor  = false
+confirmNoBtn.Parent           = confirmCard
+mkCorner(8, confirmNoBtn)
+mkStroke(1.5, COL.red, 0.2, confirmNoBtn)
+
+local function hideConfirm()
+    confirmBackdrop.Visible = false
+    confirmCard.Visible     = false
+end
+
+local function showConfirm(message, onYes)
+    if not safetyOn then
+        onYes()
+        return
+    end
+    confirmMsg.Text         = message
+    confirmBackdrop.Visible = true
+    confirmCard.Visible     = true
+    pendingYesCallback      = onYes
+end
+
+confirmYesBtn.MouseButton1Click:Connect(function()
+    hideConfirm()
+    if pendingYesCallback then
+        local cb = pendingYesCallback
+        pendingYesCallback = nil
+        cb()
+    end
+end)
+
+confirmNoBtn.MouseButton1Click:Connect(function()
+    hideConfirm()
+    pendingYesCallback = nil
+end)
+
+------------------------------------------------------
+-- ITEM ESP COLOUR HELPER
+------------------------------------------------------
+-- Returns a Color3 to use for the ESP label text, sourced from the
+-- item's own part colour wherever possible.
+--
+--   BasePart directly         → its .Color property
+--   Model with PrimaryPart    → PrimaryPart.Color
+--   Model without PrimaryPart → first BasePart descendant's .Color
+--   Nothing found             → fallback yellow (original default)
+--
+local ESP_FALLBACK_COLOUR = Color3.fromRGB(0, 0, 0)
+
+local function getItemColour(item)
+    if item:IsA("BasePart") then
+        return item.Color
+    end
+    if item:IsA("Model") then
+        if item.PrimaryPart then
+            return item.PrimaryPart.Color
+        end
+        for _, desc in ipairs(item:GetDescendants()) do
+            if desc:IsA("BasePart") then
+                return desc.Color
+            end
+        end
+    end
+    return ESP_FALLBACK_COLOUR
+end
+
+------------------------------------------------------
+-- ITEM ESP
+------------------------------------------------------
+local espLabels = {}
+local espOn     = false
+local espAddedConn, espRemovedConn, espUpdateConn
+
+local trackedNames = {}
+for _, n in ipairs(ITEMS_TO_TRACK) do trackedNames[n] = true end
+
+local function createESP(item)
+    if espLabels[item] then return end
+    local adornee = item
+    if item:IsA("Model") then
+        adornee = item.PrimaryPart or item:FindFirstChildWhichIsA("BasePart")
+        if not adornee then return end
+    end
+    if not adornee:IsA("BasePart") then return end
+
+    -- Derive the label colour from the item's part colour.
+    -- getItemColour handles BaseParts, Models, and the no-colour fallback.
+    local labelColour = getItemColour(item)
+
+    local bb = Instance.new("BillboardGui")
+    bb.Name        = "ItemESP_Tag"
+    bb.Size        = UDim2.new(0, 200, 0, 22)
+    bb.Adornee     = adornee
+    bb.AlwaysOnTop = true
+    bb.StudsOffset = Vector3.new(0, 2, 0)
+
+    local lbl = Instance.new("TextLabel")
+    lbl.Size                   = UDim2.new(1, 0, 1, 0)
+    lbl.BackgroundTransparency = 1
+    lbl.TextColor3             = labelColour   -- part-derived colour
+    lbl.TextStrokeColor3       = Color3.fromRGB(0, 0, 0)
+    lbl.TextStrokeTransparency = 0
+    lbl.Font                   = Enum.Font.GothamBold
+    lbl.TextSize               = 14
+    lbl.Text                   = item.Name
+    lbl.Parent                 = bb
+
+    bb.Parent = adornee
+    espLabels[item] = { Billboard = bb, Label = lbl, Adornee = adornee }
+end
+
+local function removeESP(item)
+    local data = espLabels[item]
+    if data then
+        if data.Billboard and data.Billboard.Parent then data.Billboard:Destroy() end
+        espLabels[item] = nil
+    end
+end
+
+local function clearAllESP()
+    for item in pairs(espLabels) do removeESP(item) end
+end
+
+local function startESP()
+    if espAddedConn   then espAddedConn:Disconnect()   espAddedConn   = nil end
+    if espRemovedConn then espRemovedConn:Disconnect() espRemovedConn = nil end
+    if espUpdateConn  then espUpdateConn:Disconnect()  espUpdateConn  = nil end
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if trackedNames[obj.Name] then createESP(obj) end
+    end
+    espAddedConn = workspace.DescendantAdded:Connect(function(obj)
+        if trackedNames[obj.Name] then createESP(obj) end
+    end)
+    espRemovedConn = workspace.DescendantRemoving:Connect(function(obj)
+        if espLabels[obj] then removeESP(obj) end
+    end)
+    local tick = 0
+    espUpdateConn = RunService.Heartbeat:Connect(function()
+        tick += 1
+        if tick < 30 then return end
+        tick = 0
+        local char   = localPlayer.Character
+        local myRoot = char and char:FindFirstChild("HumanoidRootPart")
+        for item, data in pairs(espLabels) do
+            if item and data.Adornee and data.Adornee.Parent then
+                if myRoot then
+                    local dist = (myRoot.Position - data.Adornee.Position).Magnitude
+                    data.Label.Text = item.Name .. "  " .. math.floor(dist) .. "m"
+                else
+                    data.Label.Text = item.Name
+                end
+            end
+        end
+    end)
+end
+
+local function stopESP()
+    if espAddedConn   then espAddedConn:Disconnect()   espAddedConn   = nil end
+    if espRemovedConn then espRemovedConn:Disconnect() espRemovedConn = nil end
+    if espUpdateConn  then espUpdateConn:Disconnect()  espUpdateConn  = nil end
+    clearAllESP()
+end
+
+------------------------------------------------------
+-- PLAYER ESP
+------------------------------------------------------
+local playerEspOn     = false
+local playerEspLabels = {}
+
+local function createPlayerESP(char)
+    if not char then return end
+    local head = char:FindFirstChild("Head")
+    if not head or playerEspLabels[char] then return end
+    local bb = Instance.new("BillboardGui")
+    bb.Name        = "PlayerESP_Tag"
+    bb.Size        = UDim2.new(0, 200, 0, 22)
+    bb.Adornee     = head
+    bb.AlwaysOnTop = true
+    bb.StudsOffset = Vector3.new(0, 3, 0)
+    local lbl = Instance.new("TextLabel")
+    lbl.Size                   = UDim2.new(1, 0, 1, 0)
+    lbl.BackgroundTransparency = 1
+    lbl.TextColor3             = Color3.fromRGB(57, 255, 20)
+    lbl.TextStrokeColor3       = Color3.fromRGB(0, 0, 0)
+    lbl.TextStrokeTransparency = 0
+    lbl.Font                   = Enum.Font.GothamBold
+    lbl.TextSize               = 14
+    lbl.Text                   = "..."
+    lbl.Parent                 = bb
+    bb.Parent = head
+    playerEspLabels[char] = lbl
+end
+
+local function removePlayerESP(char)
+    if playerEspLabels[char] then
+        local head = char:FindFirstChild("Head")
+        if head then
+            local tag = head:FindFirstChild("PlayerESP_Tag")
+            if tag then tag:Destroy() end
+        end
+        playerEspLabels[char] = nil
+    end
+end
+
+local playerEspTick = 0
+RunService.Heartbeat:Connect(function()
+    playerEspTick += 1
+    if playerEspTick < 12 then return end
+    playerEspTick = 0
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr ~= localPlayer then
+            local char = plr.Character
+            if char then
+                if playerEspOn then
+                    createPlayerESP(char)
+                    local head   = char:FindFirstChild("Head")
+                    local myChar = localPlayer.Character
+                    local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
+                    if head and myRoot and playerEspLabels[char] then
+                        local dist = (myRoot.Position - head.Position).Magnitude
+                        local hum  = char:FindFirstChild("Humanoid")
+                        local hp   = hum and math.floor(hum.Health) or 0
+                        playerEspLabels[char].Text =
+                            plr.Name .. "  |  " .. math.floor(dist) .. "st  |  HP: " .. hp
+                    end
+                else
+                    removePlayerESP(char)
+                end
+            end
+        end
+    end
+end)
+
+------------------------------------------------------
+-- UTILITIES SCREEN GUI
+------------------------------------------------------
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name           = "UtilitiesMenu"
+screenGui.ResetOnSpawn   = false
+screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+screenGui.Parent         = playerGui
+
+local openButton = Instance.new("TextButton")
+openButton.Name             = "OpenMenu"
+openButton.Size             = UDim2.new(0, 90, 0, 32)
+openButton.Position         = UDim2.new(0, 20, 0.78, 0)
+openButton.BackgroundColor3 = COL.panel
+openButton.TextColor3       = COL.accent
+openButton.TextSize         = 12
+openButton.Font             = Enum.Font.Code
+openButton.Text             = "[ UTIL ]"
+openButton.AutoButtonColor  = false
+openButton.Parent           = screenGui
+mkCorner(8, openButton)
+mkStroke(1.5, COL.accent, 0.5, openButton)
+makeDraggable(openButton)
+
+local mainFrame = Instance.new("Frame")
+mainFrame.Name                   = "MainFrame"
+mainFrame.Size                   = UDim2.new(0, 440, 0, 560)
+mainFrame.Position               = UDim2.new(0.5, -220, 0.5, -280)
+mainFrame.BackgroundColor3       = COL.bg
+mainFrame.BackgroundTransparency = 0.06
+mainFrame.Visible                = false
+mainFrame.Parent                 = screenGui
+mkCorner(14, mainFrame)
+mkStroke(1.5, COL.border, 0, mainFrame)
+
+local titleBar = Instance.new("Frame")
+titleBar.Size               = UDim2.new(1, 0, 0, 52)
+titleBar.BackgroundColor3   = COL.panel
+titleBar.BackgroundTransparency = 0
+titleBar.BorderSizePixel    = 0
+titleBar.Parent             = mainFrame
+mkCorner(14, titleBar)
+mkStroke(1, COL.border, 0.3, titleBar)
+do
+    local f = Instance.new("Frame")
+    f.Size             = UDim2.new(1, 0, 0, 14)
+    f.Position         = UDim2.new(0, 0, 1, -14)
+    f.BackgroundColor3 = COL.panel
+    f.BorderSizePixel  = 0
+    f.Parent           = titleBar
+end
+
+local accentStrip = Instance.new("Frame")
+accentStrip.Size             = UDim2.new(0, 3, 0, 28)
+accentStrip.Position         = UDim2.new(0, 16, 0.5, -14)
+accentStrip.BackgroundColor3 = COL.accent
+accentStrip.BorderSizePixel  = 0
+accentStrip.Parent           = titleBar
+mkCorner(4, accentStrip)
+
+local titleLabel = Instance.new("TextLabel")
+titleLabel.Size               = UDim2.new(0, 200, 0, 28)
+titleLabel.Position           = UDim2.new(0, 28, 0.5, -14)
+titleLabel.BackgroundTransparency = 1
+titleLabel.Text               = "UTILITIES"
+titleLabel.Font               = Enum.Font.Code
+titleLabel.TextSize           = 16
+titleLabel.TextColor3         = COL.text
+titleLabel.TextXAlignment     = Enum.TextXAlignment.Left
+titleLabel.Parent             = titleBar
+
+local subtitleLabel = Instance.new("TextLabel")
+subtitleLabel.Size               = UDim2.new(0, 200, 0, 14)
+subtitleLabel.Position           = UDim2.new(0, 28, 0.5, 2)
+subtitleLabel.BackgroundTransparency = 1
+subtitleLabel.Text               = "follow  •  spectate  •  fly  •  esp"
+subtitleLabel.Font               = Enum.Font.Gotham
+subtitleLabel.TextSize           = 11
+subtitleLabel.TextColor3         = COL.subtext
+subtitleLabel.TextXAlignment     = Enum.TextXAlignment.Left
+subtitleLabel.Parent             = titleBar
+
+local closeButton = Instance.new("TextButton")
+closeButton.Size             = UDim2.new(0, 30, 0, 30)
+closeButton.Position         = UDim2.new(1, -44, 0.5, -15)
+closeButton.BackgroundColor3 = Color3.fromRGB(50, 20, 20)
+closeButton.Text             = "✕"
+closeButton.TextSize         = 13
+closeButton.Font             = Enum.Font.GothamBold
+closeButton.TextColor3       = COL.red
+closeButton.AutoButtonColor  = false
+closeButton.Parent           = titleBar
+mkCorner(8, closeButton)
+mkStroke(1, COL.red, 0.5, closeButton)
+
+makeDraggable(mainFrame, titleBar)
+
+------------------------------------------------------
+-- TOGGLE SCROLL BAR
+------------------------------------------------------
+local TOGGLE_ITEM_W = 110
+local togglesOuter = Instance.new("Frame")
+togglesOuter.Size               = UDim2.new(1, -32, 0, 100)
+togglesOuter.Position           = UDim2.new(0, 16, 0, 60)
+togglesOuter.BackgroundColor3   = COL.panel
+togglesOuter.BackgroundTransparency = 0.1
+togglesOuter.BorderSizePixel    = 0
+togglesOuter.ClipsDescendants   = true
+togglesOuter.Parent             = mainFrame
+mkCorner(10, togglesOuter)
+mkStroke(1, COL.border, 0, togglesOuter)
+
+local togglesScroll = Instance.new("ScrollingFrame")
+togglesScroll.Size                   = UDim2.new(1, 0, 1, 0)
+togglesScroll.BackgroundTransparency = 1
+togglesScroll.BorderSizePixel        = 0
+togglesScroll.ScrollingDirection     = Enum.ScrollingDirection.X
+togglesScroll.AutomaticCanvasSize    = Enum.AutomaticSize.X
+togglesScroll.CanvasSize             = UDim2.new(0, 0, 0, 0)
+togglesScroll.ScrollBarThickness     = 4
+togglesScroll.ScrollBarImageColor3   = COL.accent
+togglesScroll.ScrollBarImageTransparency = 0.5
+togglesScroll.Parent                 = togglesOuter
+do
+    local l = Instance.new("UIListLayout")
+    l.FillDirection = Enum.FillDirection.Horizontal
+    l.Padding       = UDim.new(0, 0)
+    l.SortOrder     = Enum.SortOrder.LayoutOrder
+    l.Parent        = togglesScroll
+end
+
+local toggleItems = {
+    { label = "SAFETY",     sub = "Confirm before acting" },
+    { label = "FLY",        sub = "Body velocity flight"  },
+    { label = "FULLBRIGHT", sub = "Override lighting"     },
+    { label = "ITEM ESP",   sub = "Track world items"     },
+    { label = "PLAYER ESP", sub = "Show all players"      },
+}
+local toggleSwitches = {}
+
+for i, item in ipairs(toggleItems) do
+    local col = Instance.new("Frame")
+    col.Size               = UDim2.new(0, TOGGLE_ITEM_W, 1, 0)
+    col.BackgroundTransparency = 1
+    col.LayoutOrder        = i
+    col.Parent             = togglesScroll
+
+    if i > 1 then
+        local div = Instance.new("Frame")
+        div.Size             = UDim2.new(0, 1, 0.6, 0)
+        div.Position         = UDim2.new(0, 0, 0.2, 0)
+        div.BackgroundColor3 = COL.border
+        div.BorderSizePixel  = 0
+        div.Parent           = col
+    end
+
+    local lbl = Instance.new("TextLabel")
+    lbl.Size               = UDim2.new(1, -8, 0, 18)
+    lbl.Position           = UDim2.new(0, 10, 0, 10)
+    lbl.BackgroundTransparency = 1
+    lbl.Text               = item.label
+    lbl.Font               = Enum.Font.Code
+    lbl.TextSize           = 11
+    lbl.TextColor3         = COL.text
+    lbl.TextXAlignment     = Enum.TextXAlignment.Left
+    lbl.Parent             = col
+
+    local sub = Instance.new("TextLabel")
+    sub.Size               = UDim2.new(1, -8, 0, 14)
+    sub.Position           = UDim2.new(0, 10, 0, 27)
+    sub.BackgroundTransparency = 1
+    sub.Text               = item.sub
+    sub.Font               = Enum.Font.Gotham
+    sub.TextSize           = 9
+    sub.TextColor3         = COL.subtext
+    sub.TextXAlignment     = Enum.TextXAlignment.Left
+    sub.Parent             = col
+
+    local holder = Instance.new("Frame")
+    holder.Size               = UDim2.new(0, 44, 0, 24)
+    holder.Position           = UDim2.new(0.5, -22, 1, -34)
+    holder.BackgroundTransparency = 1
+    holder.Parent             = col
+
+    local sw = createToggleSwitch(holder)
+    sw.Track.Position    = UDim2.new(0, 0, 0, 0)
+    sw.Track.AnchorPoint = Vector2.new(0, 0)
+    sw.Track.Size        = UDim2.new(1, 0, 1, 0)
+    sw.Track.Parent      = holder
+
+    toggleSwitches[item.label] = sw
+end
+
+toggleSwitches["SAFETY"].SetState(true)
+
+------------------------------------------------------
+-- CAM LOCK PANEL
+------------------------------------------------------
+local camLockKeyCode   = Enum.KeyCode.J
+local camLockListening = false
+
+local camLockPanel = Instance.new("Frame")
+camLockPanel.Size               = UDim2.new(1, -32, 0, 48)
+camLockPanel.Position           = UDim2.new(0, 16, 0, 168)
+camLockPanel.BackgroundColor3   = COL.panel
+camLockPanel.BackgroundTransparency = 0.1
+camLockPanel.BorderSizePixel    = 0
+camLockPanel.Parent             = mainFrame
+mkCorner(10, camLockPanel)
+mkStroke(1, COL.border, 0, camLockPanel)
+
+do
+    local t = Instance.new("TextLabel")
+    t.Size = UDim2.new(0, 120, 0, 20) t.Position = UDim2.new(0, 12, 0, 6)
+    t.BackgroundTransparency = 1 t.Text = "CAM LOCK"
+    t.Font = Enum.Font.Code t.TextSize = 12
+    t.TextColor3 = COL.text t.TextXAlignment = Enum.TextXAlignment.Left
+    t.Parent = camLockPanel
+
+    local s = Instance.new("TextLabel")
+    s.Size = UDim2.new(0, 200, 0, 14) s.Position = UDim2.new(0, 12, 0, 26)
+    s.BackgroundTransparency = 1 s.Text = "Lock camera to nearest player"
+    s.Font = Enum.Font.Gotham s.TextSize = 9
+    s.TextColor3 = COL.subtext s.TextXAlignment = Enum.TextXAlignment.Left
+    s.Parent = camLockPanel
+end
+
+local keybindBtn = Instance.new("TextButton")
+keybindBtn.Size             = UDim2.new(0, 80, 0, 28)
+keybindBtn.Position         = UDim2.new(1, -96, 0.5, -14)
+keybindBtn.BackgroundColor3 = COL.surface
+keybindBtn.Text             = "[ J ]"
+keybindBtn.Font             = Enum.Font.Code
+keybindBtn.TextSize         = 13
+keybindBtn.TextColor3       = COL.accent
+keybindBtn.AutoButtonColor  = false
+keybindBtn.Parent           = camLockPanel
+mkCorner(6, keybindBtn)
+local keybindBtnStroke = mkStroke(1, COL.accent, 0.4, keybindBtn)
+
+local keybindHintLabel = Instance.new("TextLabel")
+keybindHintLabel.Size               = UDim2.new(0, 130, 0, 14)
+keybindHintLabel.Position           = UDim2.new(0, 12, 0.5, -7)
+keybindHintLabel.BackgroundTransparency = 1
+keybindHintLabel.Text               = "press any key..."
+keybindHintLabel.Font               = Enum.Font.Gotham
+keybindHintLabel.TextSize           = 9
+keybindHintLabel.TextColor3         = Color3.fromRGB(255, 210, 60)
+keybindHintLabel.TextXAlignment     = Enum.TextXAlignment.Left
+keybindHintLabel.Visible            = false
+keybindHintLabel.Parent             = camLockPanel
+
+keybindBtn.MouseButton1Click:Connect(function()
+    if camLockListening then return end
+    camLockListening         = true
+    keybindBtn.Text          = "..."
+    keybindBtn.TextColor3    = Color3.fromRGB(255, 210, 60)
+    keybindBtnStroke.Color   = Color3.fromRGB(255, 210, 60)
+    keybindHintLabel.Visible = true
+end)
+
+------------------------------------------------------
+-- FOLLOW / SPECTATE PLAYER LIST
+------------------------------------------------------
+do
+    local div = Instance.new("Frame")
+    div.Size             = UDim2.new(1, -32, 0, 1)
+    div.Position         = UDim2.new(0, 16, 0, 224)
+    div.BackgroundColor3 = COL.border
+    div.BorderSizePixel  = 0
+    div.Parent           = mainFrame
+
+    local lbl = Instance.new("TextLabel")
+    lbl.Size               = UDim2.new(0, 100, 0, 16)
+    lbl.Position           = UDim2.new(0, 16, 0, 232)
+    lbl.BackgroundTransparency = 1
+    lbl.Text               = "PLAYERS"
+    lbl.Font               = Enum.Font.Code
+    lbl.TextSize           = 11
+    lbl.TextColor3         = COL.subtext
+    lbl.TextXAlignment     = Enum.TextXAlignment.Left
+    lbl.Parent             = mainFrame
+end
+
+local scroll = Instance.new("ScrollingFrame")
+scroll.Name                   = "PlayerList"
+scroll.Size                   = UDim2.new(1, -32, 1, -258)
+scroll.Position               = UDim2.new(0, 16, 0, 252)
+scroll.CanvasSize             = UDim2.new(0, 0, 0, 0)
+scroll.AutomaticCanvasSize    = Enum.AutomaticSize.Y
+scroll.ScrollBarThickness     = 4
+scroll.ScrollBarImageColor3   = COL.accent
+scroll.ScrollBarImageTransparency = 0.4
+scroll.BackgroundColor3       = COL.panel
+scroll.BackgroundTransparency = 0.1
+scroll.BorderSizePixel        = 0
+scroll.Parent                 = mainFrame
+mkCorner(10, scroll)
+mkStroke(1, COL.border, 0, scroll)
+do
+    local p = Instance.new("UIPadding")
+    p.PaddingTop    = UDim.new(0, 8)
+    p.PaddingBottom = UDim.new(0, 8)
+    p.PaddingLeft   = UDim.new(0, 8)
+    p.PaddingRight  = UDim.new(0, 8)
+    p.Parent        = scroll
+
+    -- SortOrder.Name sorts row frames by their .Name (= player name) alphabetically
+    local l = Instance.new("UIListLayout")
+    l.Padding       = UDim.new(0, 6)
+    l.FillDirection = Enum.FillDirection.Vertical
+    l.SortOrder     = Enum.SortOrder.Name
+    l.Parent        = scroll
+end
+
+------------------------------------------------------
+-- FOLLOW / SPECTATE STATE
+------------------------------------------------------
+local currentTarget         = nil
+local currentSpectateTarget = nil
+local followDistance        = 4
+
+local function resetCamera()
+    local char = localPlayer.Character
+    if char then
+        local hum = char:FindFirstChild("Humanoid")
+        if hum then camera.CameraSubject = hum end
+    end
+end
+
+local function setSpectateTarget(player)
+    currentSpectateTarget = player
+    if player == nil then resetCamera() return end
+    local char = player.Character
+    if char then
+        local hum = char:FindFirstChild("Humanoid")
+        if hum then camera.CameraSubject = hum end
+    end
+end
+
+local playerRows = {}
+
+local function clearRows()
+    for _, row in pairs(playerRows) do row.Frame:Destroy() end
+    table.clear(playerRows)
+end
+
+local function createRowForPlayer(player)
+    if player == localPlayer then return end
+    if playerRows[player] then return end
+
+    local rowFrame = Instance.new("Frame")
+    rowFrame.Name               = player.Name  -- .Name drives UIListLayout alphabetical sort
+    rowFrame.Size               = UDim2.new(1, 0, 0, 46)
+    rowFrame.BackgroundColor3   = COL.surface
+    rowFrame.BackgroundTransparency = 0.1
+    rowFrame.Parent             = scroll
+    mkCorner(8, rowFrame)
+    mkStroke(1, COL.border, 0.5, rowFrame)
+
+    local dot = Instance.new("Frame")
+    dot.Size             = UDim2.new(0, 30, 0, 30)
+    dot.Position         = UDim2.new(0, 8, 0.5, -15)
+    dot.BackgroundColor3 = COL.accentDim
+    dot.BorderSizePixel  = 0
+    dot.Parent           = rowFrame
+    mkCorner(99, dot)
+
+    local il = Instance.new("TextLabel")
+    il.Size               = UDim2.new(1, 0, 1, 0)
+    il.BackgroundTransparency = 1
+    il.Text               = string.upper(string.sub(player.Name, 1, 1))
+    il.Font               = Enum.Font.GothamBold
+    il.TextSize           = 14
+    il.TextColor3         = COL.white
+    il.Parent             = dot
+
+    local nl = Instance.new("TextLabel")
+    nl.Size               = UDim2.new(0.4, 0, 1, 0)
+    nl.Position           = UDim2.new(0, 46, 0, 0)
+    nl.BackgroundTransparency = 1
+    nl.Text               = player.Name
+    nl.TextSize           = 13
+    nl.Font               = Enum.Font.Gotham
+    nl.TextColor3         = COL.text
+    nl.TextXAlignment     = Enum.TextXAlignment.Left
+    nl.TextTruncate       = Enum.TextTruncate.AtEnd
+    nl.Parent             = rowFrame
+
+    local followBtn = Instance.new("TextButton")
+    followBtn.Size             = UDim2.new(0, 72, 0, 28)
+    followBtn.Position         = UDim2.new(1, -160, 0.5, -14)
+    followBtn.BackgroundColor3 = COL.surface
+    followBtn.Text             = "FOLLOW"
+    followBtn.TextSize         = 11
+    followBtn.Font             = Enum.Font.Code
+    followBtn.TextColor3       = COL.subtext
+    followBtn.AutoButtonColor  = false
+    followBtn.Parent           = rowFrame
+    mkCorner(6, followBtn)
+    local followStroke = mkStroke(1, COL.border, 0, followBtn)
+
+    local specBtn = Instance.new("TextButton")
+    specBtn.Size             = UDim2.new(0, 72, 0, 28)
+    specBtn.Position         = UDim2.new(1, -80, 0.5, -14)
+    specBtn.BackgroundColor3 = COL.surface
+    specBtn.Text             = "SPECTATE"
+    specBtn.TextSize         = 10
+    specBtn.Font             = Enum.Font.Code
+    specBtn.TextColor3       = COL.subtext
+    specBtn.AutoButtonColor  = false
+    specBtn.Parent           = rowFrame
+    mkCorner(6, specBtn)
+    local specStroke = mkStroke(1, COL.border, 0, specBtn)
+
+    local isFollowOn, isSpectateOn = false, false
+
+    local function setFollow(on)
+        isFollowOn                 = on
+        followBtn.BackgroundColor3 = on and COL.accentDim or COL.surface
+        followBtn.TextColor3       = on and COL.accent    or COL.subtext
+        followStroke.Color         = on and COL.accent    or COL.border
+    end
+
+    local function setSpectate(on)
+        isSpectateOn             = on
+        specBtn.BackgroundColor3 = on and Color3.fromRGB(60, 50, 10) or COL.surface
+        specBtn.TextColor3       = on and Color3.fromRGB(255, 210, 60) or COL.subtext
+        specStroke.Color         = on and Color3.fromRGB(255, 210, 60) or COL.border
+    end
+
+    followBtn.MouseButton1Click:Connect(function()
+        if isFollowOn then
+            for op, data in pairs(playerRows) do
+                if op ~= player then data.SetFollow(false) end
+            end
+            isFollowOn = false
+            setFollow(false)
+            currentTarget = nil
+        else
+            showConfirm(
+                "Follow " .. player.Name .. "?\nThis will move your character to them.",
+                function()
+                    for op, data in pairs(playerRows) do
+                        if op ~= player then data.SetFollow(false) end
+                    end
+                    isFollowOn = true
+                    setFollow(true)
+                    currentTarget = player
+                end
+            )
+        end
+    end)
+
+    specBtn.MouseButton1Click:Connect(function()
+        for op, data in pairs(playerRows) do
+            if op ~= player then data.SetSpectate(false) end
+        end
+        isSpectateOn = not isSpectateOn
+        setSpectate(isSpectateOn)
+        if isSpectateOn then
+            setSpectateTarget(player)
+        elseif currentSpectateTarget == player then
+            setSpectateTarget(nil)
+        end
+    end)
+
+    playerRows[player] = { Frame = rowFrame, SetFollow = setFollow, SetSpectate = setSpectate }
+    setFollow(false)
+    setSpectate(false)
+end
+
+local function rebuildList()
+    clearRows()
+    local sortedPlayers = {}
+    for _, plr in ipairs(Players:GetPlayers()) do
+        table.insert(sortedPlayers, plr)
+    end
+    table.sort(sortedPlayers, function(a, b)
+        return a.Name:lower() < b.Name:lower()
+    end)
+    for _, plr in ipairs(sortedPlayers) do
+        createRowForPlayer(plr)
+    end
+end
+rebuildList()
+
+Players.PlayerAdded:Connect(function(plr) createRowForPlayer(plr) end)
+Players.PlayerRemoving:Connect(function(plr)
+    if playerRows[plr] then
+        if currentTarget == plr then currentTarget = nil end
+        if currentSpectateTarget == plr then setSpectateTarget(nil) end
+        playerRows[plr].Frame:Destroy()
+        playerRows[plr] = nil
+    end
+end)
+
+------------------------------------------------------
+-- FOLLOW HEARTBEAT
+------------------------------------------------------
+RunService.Heartbeat:Connect(function()
+    if not currentTarget then return end
+    local char       = localPlayer.Character
+    local targetChar = currentTarget.Character
+    if not char or not targetChar then return end
+    local myRoot     = char:FindFirstChild("HumanoidRootPart")
+    local targetRoot = targetChar:FindFirstChild("HumanoidRootPart")
+    if not myRoot or not targetRoot then return end
+    local targetCF = targetRoot.CFrame
+    local under    = targetCF * CFrame.new(0, -followDistance, 0)
+    myRoot.CFrame  = CFrame.new(under.Position, targetCF.Position)
+                     * CFrame.Angles(0, 0, math.rad(90))
+end)
+
+------------------------------------------------------
+-- FLY SYSTEM
+------------------------------------------------------
+local flying = false
+local flySpeed = 60
+local bodyGyro, bodyVelocity, flyConnection
+
+local function startFly()
+    local char = localPlayer.Character
+    if not char then return end
+    local root = char:FindFirstChild("HumanoidRootPart")
+    if not root then return end
+    flying    = true
+    bodyGyro  = Instance.new("BodyGyro")
+    bodyGyro.P         = 9e4
+    bodyGyro.MaxTorque = Vector3.new(9e9, 9e9, 9e9)
+    bodyGyro.CFrame    = root.CFrame
+    bodyGyro.Parent    = root
+    bodyVelocity = Instance.new("BodyVelocity")
+    bodyVelocity.MaxForce = Vector3.new(9e9, 9e9, 9e9)
+    bodyVelocity.Velocity = Vector3.zero
+    bodyVelocity.Parent   = root
+    if flyConnection then flyConnection:Disconnect() end
+    flyConnection = RunService.Heartbeat:Connect(function()
+        if not flying then return end
+        if not root or not root.Parent then flying = false return end
+        local cam = workspace.CurrentCamera
+        local dir = Vector3.zero
+        if UserInputService:IsKeyDown(Enum.KeyCode.W) then dir += cam.CFrame.LookVector  end
+        if UserInputService:IsKeyDown(Enum.KeyCode.S) then dir -= cam.CFrame.LookVector  end
+        if UserInputService:IsKeyDown(Enum.KeyCode.A) then dir -= cam.CFrame.RightVector end
+        if UserInputService:IsKeyDown(Enum.KeyCode.D) then dir += cam.CFrame.RightVector end
+        bodyVelocity.Velocity = dir * flySpeed
+        bodyGyro.CFrame       = cam.CFrame
+    end)
+end
+
+local function stopFly()
+    flying = false
+    if flyConnection then flyConnection:Disconnect() flyConnection = nil end
+    if bodyGyro      then bodyGyro:Destroy()         bodyGyro      = nil end
+    if bodyVelocity  then bodyVelocity:Destroy()     bodyVelocity  = nil end
+end
+
+------------------------------------------------------
+-- TOGGLE WIRING
+------------------------------------------------------
+toggleSwitches["SAFETY"].OnChanged(function(on)
+    safetyOn = on
+    if not on then
+        hideConfirm()
+        pendingYesCallback = nil
+    end
+end)
+
+toggleSwitches["FLY"].OnChanged(function(on)
+    if on then
+        showConfirm(
+            "Enable fly?\nThis will give your character body velocity flight.",
+            function()
+                startFly()
+            end
+        )
+    else
+        stopFly()
+    end
+end)
+
+local originalLighting = {
+    Brightness     = Lighting.Brightness,
+    ClockTime      = Lighting.ClockTime,
+    FogEnd         = Lighting.FogEnd,
+    Ambient        = Lighting.Ambient,
+    OutdoorAmbient = Lighting.OutdoorAmbient,
+}
+
+local fullbrightActive = false
+local fullbrightConn   = nil
+
+local FULLBRIGHT_VALUES = {
+    Brightness     = 3,
+    ClockTime      = 14,
+    FogEnd         = 1e6,
+    Ambient        = Color3.new(1, 1, 1),
+    OutdoorAmbient = Color3.new(1, 1, 1),
+}
+
+local function applyFullbright()
+    Lighting.Brightness     = FULLBRIGHT_VALUES.Brightness
+    Lighting.ClockTime      = FULLBRIGHT_VALUES.ClockTime
+    Lighting.FogEnd         = FULLBRIGHT_VALUES.FogEnd
+    Lighting.Ambient        = FULLBRIGHT_VALUES.Ambient
+    Lighting.OutdoorAmbient = FULLBRIGHT_VALUES.OutdoorAmbient
+end
+
+local function startFullbrightWatcher()
+    if fullbrightConn then fullbrightConn:Disconnect() fullbrightConn = nil end
+    fullbrightConn = Lighting.Changed:Connect(function(prop)
+        if not fullbrightActive then return end
+        local expected = FULLBRIGHT_VALUES[prop]
+        if expected ~= nil and Lighting[prop] ~= expected then
+            applyFullbright()
+        end
+    end)
+end
+
+toggleSwitches["FULLBRIGHT"].OnChanged(function(on)
+    fullbrightActive = on
+    if on then
+        applyFullbright()
+        startFullbrightWatcher()
+    else
+        if fullbrightConn then fullbrightConn:Disconnect() fullbrightConn = nil end
+        Lighting.Brightness     = originalLighting.Brightness
+        Lighting.ClockTime      = originalLighting.ClockTime
+        Lighting.FogEnd         = originalLighting.FogEnd
+        Lighting.Ambient        = originalLighting.Ambient
+        Lighting.OutdoorAmbient = originalLighting.OutdoorAmbient
+    end
+end)
+
+toggleSwitches["ITEM ESP"].OnChanged(function(on)
+    espOn = on
+    if on then startESP() else stopESP() end
+end)
+
+toggleSwitches["PLAYER ESP"].OnChanged(function(on)
+    playerEspOn = on
+    if not on then
+        for _, plr in ipairs(Players:GetPlayers()) do
+            if plr.Character then removePlayerESP(plr.Character) end
+        end
+    end
+end)
+
+------------------------------------------------------
+-- CAM LOCK LOGIC
+------------------------------------------------------
+local camLocking    = false
+local camLockTarget = nil
+
+local function getNearestPlayer()
+    local mousePos      = UserInputService:GetMouseLocation()
+    local nearest, nearestDist = nil, math.huge
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr ~= localPlayer and plr.Character then
+            local head  = plr.Character:FindFirstChild("Head")
+            local torso = plr.Character:FindFirstChild("HumanoidRootPart")
+            if head and torso then
+                local mid3D  = (head.Position + torso.Position) / 2
+                local _, onScreen = camera:WorldToViewportPoint(mid3D)
+                if onScreen then
+                    local screenPos = camera:WorldToViewportPoint(mid3D)
+                    local screenVec = Vector2.new(screenPos.X, screenPos.Y)
+                    local dist      = (mousePos - screenVec).Magnitude
+                    if dist < nearestDist then
+                        nearestDist = dist
+                        nearest     = { head = head, torso = torso }
+                    end
+                end
+            end
+        end
+    end
+    return nearest
+end
+
+RunService.RenderStepped:Connect(function()
+    if not camLocking or not camLockTarget then return end
+    local h, t = camLockTarget.head, camLockTarget.torso
+    if h and h.Parent and t and t.Parent then
+        camera.CFrame = CFrame.new(camera.CFrame.Position, (h.Position + t.Position) / 2)
+    end
+end)
+
+UserInputService.InputBegan:Connect(function(input, gp)
+    if camLockListening then
+        if input.UserInputType == Enum.UserInputType.Keyboard then
+            camLockKeyCode           = input.KeyCode
+            local kn                 = tostring(input.KeyCode):gsub("Enum.KeyCode.", "")
+            keybindBtn.Text          = "[ " .. kn .. " ]"
+            keybindBtn.TextColor3    = COL.accent
+            keybindBtnStroke.Color   = COL.accent
+            keybindHintLabel.Visible = false
+            camLockListening         = false
+        end
+        return
+    end
+    if gp then return end
+    if input.KeyCode == camLockKeyCode then
+        camLocking = not camLocking
+        if camLocking then camLockTarget = getNearestPlayer()
+        else camLockTarget = nil end
+    end
+end)
+
+openButton.MouseButton1Click:Connect(function()
+    mainFrame.Visible = not mainFrame.Visible
+end)
+closeButton.MouseButton1Click:Connect(function()
+    mainFrame.Visible = false
+end)
+------------------------------------------------------
+-- LOADSTRING BUTTONS (RSP / EXPLORE / NET)
+------------------------------------------------------
+do
+    local lsDiv = Instance.new("Frame")
+    lsDiv.Size             = UDim2.new(1, -32, 0, 1)
+    lsDiv.Position         = UDim2.new(0, 16, 1, -60)
+    lsDiv.BackgroundColor3 = COL.border
+    lsDiv.BorderSizePixel  = 0
+    lsDiv.Parent           = mainFrame
+
+    local lsRow = Instance.new("Frame")
+    lsRow.Size               = UDim2.new(1, -32, 0, 44)
+    lsRow.Position           = UDim2.new(0, 16, 1, -54)
+    lsRow.BackgroundTransparency = 1
+    lsRow.Parent             = mainFrame
+
+    local lsBtnData = {
+        { label = "RSP",     ls = game:HttpGet("https://rawscripts.net/raw/Universal-Script-RemoteSpy-for-Xeno-and-Solara-32578") },
+        { label = "EXPLORE", ls = game:HttpGet("https://rawscripts.net/raw/Universal-Script-NDex-V1-Dark-Dex-76941") },
+        { label = "NET",     ls = game:HttpGet("https://raw.githubusercontent.com/vetrexian/universal/refs/heads/main/message%20(2).txt") },
+    }
+
+    local btnW = 120
+
+    for i, info in ipairs(lsBtnData) do
+        local btn = Instance.new("TextButton")
+        btn.Size             = UDim2.new(0, btnW, 0, 34)
+        btn.Position         = UDim2.new(0, (i - 1) * (btnW + 8), 0.5, -17)
+        btn.BackgroundColor3 = COL.surface
+        btn.Text             = info.label
+        btn.Font             = Enum.Font.Code
+        btn.TextSize         = 13
+        btn.TextColor3       = COL.accent
+        btn.AutoButtonColor  = false
+        btn.Parent           = lsRow
+        mkCorner(8, btn)
+        mkStroke(1.5, COL.accent, 0.4, btn)
+
+        local lsCode = info.ls
+        btn.MouseButton1Click:Connect(function()
+            loadstring(lsCode)()
+        end)
+    end
+end
