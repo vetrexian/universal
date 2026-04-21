@@ -485,7 +485,7 @@ makeDraggable(openButton)
 
 local mainFrame = Instance.new("Frame")
 mainFrame.Name                   = "MainFrame"
-mainFrame.Size                   = UDim2.new(0, 440, 0, 560)
+mainFrame.Size                   = UDim2.new(0, 440, 0, 640)
 mainFrame.Position               = UDim2.new(0.5, -220, 0.5, -280)
 mainFrame.BackgroundColor3       = COL.bg
 mainFrame.BackgroundTransparency = 0.06
@@ -720,20 +720,83 @@ keybindBtn.MouseButton1Click:Connect(function()
     keybindHintLabel.Visible = true
 end)
 
+
+------------------------------------------------------
+-- SCRIPTS PANEL (RSP / EXPLORE / NET)
+------------------------------------------------------
+do
+    local scriptsDiv = Instance.new("Frame")
+    scriptsDiv.Size             = UDim2.new(1, -32, 0, 1)
+    scriptsDiv.Position         = UDim2.new(0, 16, 0, 224)
+    scriptsDiv.BackgroundColor3 = COL.border
+    scriptsDiv.BorderSizePixel  = 0
+    scriptsDiv.Parent           = mainFrame
+
+    local scriptsLbl = Instance.new("TextLabel")
+    scriptsLbl.Size               = UDim2.new(0, 100, 0, 16)
+    scriptsLbl.Position           = UDim2.new(0, 16, 0, 228)
+    scriptsLbl.BackgroundTransparency = 1
+    scriptsLbl.Text               = "SCRIPTS"
+    scriptsLbl.Font               = Enum.Font.Code
+    scriptsLbl.TextSize           = 11
+    scriptsLbl.TextColor3         = COL.subtext
+    scriptsLbl.TextXAlignment     = Enum.TextXAlignment.Left
+    scriptsLbl.Parent             = mainFrame
+
+    local scriptsPanel = Instance.new("Frame")
+    scriptsPanel.Size               = UDim2.new(1, -32, 0, 48)
+    scriptsPanel.Position           = UDim2.new(0, 16, 0, 246)
+    scriptsPanel.BackgroundColor3   = COL.panel
+    scriptsPanel.BackgroundTransparency = 0.1
+    scriptsPanel.BorderSizePixel    = 0
+    scriptsPanel.Parent             = mainFrame
+    mkCorner(10, scriptsPanel)
+    mkStroke(1, COL.border, 0, scriptsPanel)
+
+    local lsBtnData = {
+        { label = "RSP",     url = "https://rawscripts.net/raw/Universal-Script-RemoteSpy-for-Xeno-and-Solara-32578" },
+        { label = "EXPLORE", url = "https://rawscripts.net/raw/Universal-Script-NDex-V1-Dark-Dex-76941" },
+        { label = "NET",     url = "https://raw.githubusercontent.com/vetrexian/universal/refs/heads/main/message%20(2).txt" },
+    }
+
+    local btnW = 118
+    local startX = 10
+
+    for i, info in ipairs(lsBtnData) do
+        local btn = Instance.new("TextButton")
+        btn.Size             = UDim2.new(0, btnW, 0, 32)
+        btn.Position         = UDim2.new(0, startX + (i - 1) * (btnW + 8), 0.5, -16)
+        btn.BackgroundColor3 = COL.surface
+        btn.Text             = info.label
+        btn.Font             = Enum.Font.Code
+        btn.TextSize         = 13
+        btn.TextColor3       = COL.accent
+        btn.AutoButtonColor  = false
+        btn.Parent           = scriptsPanel
+        mkCorner(8, btn)
+        mkStroke(1.5, COL.accent, 0.4, btn)
+
+        local url = info.url
+        btn.MouseButton1Click:Connect(function()
+            loadstring(game:HttpGet(url))()
+        end)
+    end
+end
+
 ------------------------------------------------------
 -- FOLLOW / SPECTATE PLAYER LIST
 ------------------------------------------------------
 do
     local div = Instance.new("Frame")
     div.Size             = UDim2.new(1, -32, 0, 1)
-    div.Position         = UDim2.new(0, 16, 0, 224)
+    div.Position         = UDim2.new(0, 16, 0, 292)
     div.BackgroundColor3 = COL.border
     div.BorderSizePixel  = 0
     div.Parent           = mainFrame
 
     local lbl = Instance.new("TextLabel")
     lbl.Size               = UDim2.new(0, 100, 0, 16)
-    lbl.Position           = UDim2.new(0, 16, 0, 232)
+    lbl.Position           = UDim2.new(0, 16, 0, 300)
     lbl.BackgroundTransparency = 1
     lbl.Text               = "PLAYERS"
     lbl.Font               = Enum.Font.Code
@@ -745,8 +808,8 @@ end
 
 local scroll = Instance.new("ScrollingFrame")
 scroll.Name                   = "PlayerList"
-scroll.Size                   = UDim2.new(1, -32, 1, -258)
-scroll.Position               = UDim2.new(0, 16, 0, 252)
+scroll.Size                   = UDim2.new(1, -32, 1, -326)
+scroll.Position               = UDim2.new(0, 16, 0, 320)
 scroll.CanvasSize             = UDim2.new(0, 0, 0, 0)
 scroll.AutomaticCanvasSize    = Enum.AutomaticSize.Y
 scroll.ScrollBarThickness     = 4
@@ -1174,48 +1237,3 @@ end)
 closeButton.MouseButton1Click:Connect(function()
     mainFrame.Visible = false
 end)
-------------------------------------------------------
--- LOADSTRING BUTTONS (RSP / EXPLORE / NET)
-------------------------------------------------------
-do
-    local lsDiv = Instance.new("Frame")
-    lsDiv.Size             = UDim2.new(1, -32, 0, 1)
-    lsDiv.Position         = UDim2.new(0, 16, 1, -60)
-    lsDiv.BackgroundColor3 = COL.border
-    lsDiv.BorderSizePixel  = 0
-    lsDiv.Parent           = mainFrame
-
-    local lsRow = Instance.new("Frame")
-    lsRow.Size               = UDim2.new(1, -32, 0, 44)
-    lsRow.Position           = UDim2.new(0, 16, 1, -54)
-    lsRow.BackgroundTransparency = 1
-    lsRow.Parent             = mainFrame
-
-    local lsBtnData = {
-        { label = "RSP",     ls = game:HttpGet("https://rawscripts.net/raw/Universal-Script-RemoteSpy-for-Xeno-and-Solara-32578") },
-        { label = "EXPLORE", ls = game:HttpGet("https://rawscripts.net/raw/Universal-Script-NDex-V1-Dark-Dex-76941") },
-        { label = "NET",     ls = game:HttpGet("https://raw.githubusercontent.com/vetrexian/universal/refs/heads/main/message%20(2).txt") },
-    }
-
-    local btnW = 120
-
-    for i, info in ipairs(lsBtnData) do
-        local btn = Instance.new("TextButton")
-        btn.Size             = UDim2.new(0, btnW, 0, 34)
-        btn.Position         = UDim2.new(0, (i - 1) * (btnW + 8), 0.5, -17)
-        btn.BackgroundColor3 = COL.surface
-        btn.Text             = info.label
-        btn.Font             = Enum.Font.Code
-        btn.TextSize         = 13
-        btn.TextColor3       = COL.accent
-        btn.AutoButtonColor  = false
-        btn.Parent           = lsRow
-        mkCorner(8, btn)
-        mkStroke(1.5, COL.accent, 0.4, btn)
-
-        local lsCode = info.ls
-        btn.MouseButton1Click:Connect(function()
-            loadstring(lsCode)()
-        end)
-    end
-end
